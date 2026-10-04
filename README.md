@@ -213,6 +213,16 @@ npm run lint && npm run build
 
 ## Deploy to Vercel
 
+Live: **https://tharun-ai-db-copilot.vercel.app**. `vercel.json` sets the Next.js framework and pins functions to `syd1`, next to the Supabase database in ap-southeast-2.
+
+If the target database already contains other tables (a shared Supabase project), `prisma migrate deploy` stops with `P3005`. In that case apply the migration once and baseline it:
+
+```bash
+npx prisma db execute --file prisma/migrations/<timestamp>_init/migration.sql
+npx prisma migrate resolve --applied <timestamp>_init
+npm run db:seed && npm run db:readonly
+```
+
 ```bash
 vercel link
 vercel env add DATABASE_URL production      # repeat for each variable above
