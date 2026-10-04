@@ -48,13 +48,18 @@ app/
   api/logs/route.ts            JSON logs endpoint (auth, ?page=&q=)
   api/auth/[...nextauth]/      Auth.js handlers
 components/
-  Chat.tsx  Message.tsx  LoginButton.tsx  LogoutButton.tsx  AppHeader.tsx  QueryLogsTable.tsx
+  Chat.tsx                     Conversation state + calls /api/chat
+  ChatInput.tsx                Suggestions, input box, questions-left counter
+  Message.tsx                  One chat bubble (markdown answers)
+  AppHeader.tsx  LoginButton.tsx  LogoutButton.tsx  QueryLogsTable.tsx
+  ClientIdLogger.tsx           Debug: prints the Google client_id in the browser console
 lib/
-  auth.ts  auth-actions.ts     Auth.js config + sign-in/out server actions
+  auth.ts  auth-actions.ts     Auth.js config (+ callback logging) and sign-in/out server actions
   gemini.ts                    Gemini ⇄ MCP tool-calling loop, system prompt, error mapping
   mcp-client.ts                MCP client (official SDK)
   db.ts                        Prisma client (app DB: copilot_query_logs)
-  query-logs.ts                Create/list query logs
+  pg-config.ts                 Shared node-postgres config (TLS for remote hosts)
+  query-logs.ts                Create/list query logs, 100-question limit
 mcp/
   server.ts                    MCP server: registers the 6 tools
   stdio.ts                     Run the MCP server standalone over stdio
@@ -62,6 +67,8 @@ mcp/
   tools/sql-guard.ts           SELECT-only validator
 prisma/
   schema.prisma  seed.ts  migrations/
+types/next-auth.d.ts           Adds user.id to the session type
+vercel.json                    Next.js preset + syd1 region
 scripts/
   setup-readonly-user.ts       Creates the mcp_readonly Postgres role
   test-mcp.ts                  MCP end-to-end + security tests

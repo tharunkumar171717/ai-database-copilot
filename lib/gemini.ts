@@ -1,5 +1,6 @@
 import "server-only";
 import { ApiError, GoogleGenAI, type Content, type FunctionDeclaration, type Part } from "@google/genai";
+import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { connectMcp } from "./mcp-client";
 
 /**
@@ -90,9 +91,9 @@ function toGeminiError(err: unknown, timedOut: boolean): CopilotError {
 }
 
 /** Gemini accepts JSON Schema directly; drop the meta keyword it doesn't need. */
-function toFunctionDeclaration(tool: { name: string; description?: string; inputSchema: Record<string, unknown> }): FunctionDeclaration {
-  const { $schema: _ignored, ...schema } = tool.inputSchema;
-  void _ignored;
+function toFunctionDeclaration(tool: Tool): FunctionDeclaration {
+  const schema: Record<string, unknown> = { ...tool.inputSchema };
+  delete schema.$schema;
   return { name: tool.name, description: tool.description, parametersJsonSchema: schema };
 }
 
@@ -119,7 +120,7 @@ export async function askDatabaseCopilot(question: string, history: ChatTurn[] =
 
   try {
     const tools = await mcp.listTools();
-    const functionDeclarations = tools.map((t) => toFunctionDeclaration(t as never));
+    const functionDeclarations = tools.map(toFunctionDeclaration);
 
     const contents: Content[] = [
       ...history.map<Content>((turn) => ({
