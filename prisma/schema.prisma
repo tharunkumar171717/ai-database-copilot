@@ -1,6 +1,8 @@
 // AI Database Copilot - Prisma schema
-// Business tables (users, products, orders) are what the AI can query through MCP.
-// query_logs is an application table that records every question; the MCP
+// All tables use a "copilot_" prefix so they can live in a shared database
+// (e.g. a Supabase project used by other apps) without name collisions.
+// Business tables (copilot_users, copilot_products, copilot_orders) are what the AI can query through MCP.
+// copilot_query_logs is an application table that records every question; the MCP
 // read-only role is NOT granted access to it.
 
 generator client {
@@ -19,7 +21,7 @@ model User {
   createdAt DateTime @default(now()) @map("created_at")
   orders    Order[]
 
-  @@map("users")
+  @@map("copilot_users")
 }
 
 model Product {
@@ -30,7 +32,7 @@ model Product {
   createdAt DateTime @default(now()) @map("created_at")
   orders    Order[]
 
-  @@map("products")
+  @@map("copilot_products")
 }
 
 model Order {
@@ -47,7 +49,7 @@ model Order {
   @@index([userId])
   @@index([productId])
   @@index([status])
-  @@map("orders")
+  @@map("copilot_orders")
 }
 
 model QueryLog {
@@ -62,5 +64,5 @@ model QueryLog {
 
   @@index([createdAt])
   @@index([userEmail])
-  @@map("query_logs")
+  @@map("copilot_query_logs")
 }

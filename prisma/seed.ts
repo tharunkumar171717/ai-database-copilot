@@ -1,9 +1,10 @@
 import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../lib/generated/prisma/client";
+import { pgConfig } from "../lib/pg-config";
 
 const prisma = new PrismaClient({
-  adapter: new PrismaPg({ connectionString: process.env.DIRECT_URL || process.env.DATABASE_URL! }),
+  adapter: new PrismaPg(pgConfig(process.env.DIRECT_URL || process.env.DATABASE_URL!)),
 });
 
 const users = [
@@ -64,15 +65,15 @@ const orders: [number, number, number, string, number][] = [
 
 async function main() {
   console.log("Seeding database...");
-  // Reset business tables (query_logs is left untouched).
+  // Reset business tables (copilot_query_logs is left untouched).
   await prisma.order.deleteMany();
   await prisma.product.deleteMany();
   await prisma.user.deleteMany();
   await prisma.$executeRawUnsafe(
-    "ALTER SEQUENCE users_id_seq RESTART WITH 1",
+    "ALTER SEQUENCE copilot_users_id_seq RESTART WITH 1",
   );
-  await prisma.$executeRawUnsafe("ALTER SEQUENCE products_id_seq RESTART WITH 1");
-  await prisma.$executeRawUnsafe("ALTER SEQUENCE orders_id_seq RESTART WITH 1");
+  await prisma.$executeRawUnsafe("ALTER SEQUENCE copilot_products_id_seq RESTART WITH 1");
+  await prisma.$executeRawUnsafe("ALTER SEQUENCE copilot_orders_id_seq RESTART WITH 1");
 
   const daysAgo = (d: number) => new Date(Date.now() - d * 24 * 60 * 60 * 1000);
 

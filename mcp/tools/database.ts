@@ -6,10 +6,11 @@
  * never included in any tool output.
  */
 import { Pool, type PoolClient } from "pg";
+import { pgConfig } from "../../lib/pg-config";
 import { validateReadOnlySql } from "./sql-guard";
 
-/** Tables the AI is allowed to see. Everything else (query_logs, migrations...) is hidden. */
-export const EXPOSED_TABLES = ["users", "products", "orders"] as const;
+/** Tables the AI is allowed to see. Everything else (copilot_query_logs, other apps' tables, migrations...) is hidden. */
+export const EXPOSED_TABLES = ["copilot_users", "copilot_products", "copilot_orders"] as const;
 export type ExposedTable = (typeof EXPOSED_TABLES)[number];
 
 export const MAX_QUERY_ROWS = 100;
@@ -25,11 +26,10 @@ function getPool(): Pool {
     const connectionString = process.env.MCP_DATABASE_URL;
     if (!connectionString) throw new DatabaseToolError("The MCP database connection is not configured.");
     pool = new Pool({
-      connectionString,
+      ...pgConfig(connectionString),
       max: 3,
       idleTimeoutMillis: 10_000,
       connectionTimeoutMillis: 8_000,
-      ssl: /sslmode=require|supabase|neon\.tech/.test(connectionString) ? { rejectUnauthorized: false } : undefined,
     });
     pool.on("error", (err) => console.error("[mcp] idle pg client error:", sanitizeError(err)));
   }
@@ -62,7 +62,7 @@ async function withReadOnly<T>(fn: (client: PoolClient) => Promise<T>): Promise<
     if (err instanceof DatabaseToolError) throw err;
     const pgErr = err as { code?: string };
     if (pgErr.code === "57014") throw new DatabaseToolError("The query took too long and was cancelled.");
-    if (pgErr.code === "42501") throw new DatabaseToolError("Permission denied: only users, products and orders can be read.");
+    if (pgErr.code === "42501") throw new DatabaseToolError(`Permission denied: only ${EXPOSED_TABLES.join(", ")} can be read.`);
     if (pgErr.code === "25006") throw new DatabaseToolError("Write operations are not allowed (read-only).");
     throw new DatabaseToolError(`Database error: ${sanitizeError(err)}`);
   } finally {

@@ -66,7 +66,7 @@ export async function POST(request: Request) {
       answer: result.answer,
       toolsUsed,
       remaining: remaining - 1,
-      // Generated SQL is intentionally NOT sent to the browser; it is stored in query_logs (/logs).
+      // Generated SQL is intentionally NOT sent to the browser; it is stored in copilot_query_logs (/logs).
     });
   } catch (err) {
     const error =

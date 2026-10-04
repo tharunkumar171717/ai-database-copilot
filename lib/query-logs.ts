@@ -1,7 +1,7 @@
 import "server-only";
 import { prisma } from "./db";
 
-/** Persistence for the query_logs audit table (who asked what, when, which tool, which SQL, which answer). */
+/** Persistence for the copilot_query_logs audit table (who asked what, when, which tool, which SQL, which answer). */
 
 export type NewQueryLog = {
   userId: string;
@@ -17,13 +17,13 @@ export async function createQueryLog(entry: NewQueryLog) {
     await prisma.queryLog.create({ data: entry });
   } catch (err) {
     // Logging must never break the chat response, but failures should be visible in server logs.
-    console.error("[query_logs] failed to write log:", (err as Error).message);
+    console.error("[copilot_query_logs] failed to write log:", (err as Error).message);
   }
 }
 
 /**
  * Hard cap on the total number of questions this deployment will answer (all users combined).
- * Every answered or failed question is a row in query_logs, so the row count is the usage.
+ * Every answered or failed question is a row in copilot_query_logs, so the row count is the usage.
  */
 export const QUESTION_LIMIT = 100;
 

@@ -97,7 +97,7 @@ export function createDatabaseMcpServer(): McpServer {
     {
       title: "Query database (read-only)",
       description:
-        `Run a single read-only PostgreSQL SELECT (or WITH ... SELECT) query against the users, products and orders tables. ` +
+        `Run a single read-only PostgreSQL SELECT (or WITH ... SELECT) query against the ${EXPOSED_TABLES.join(", ")} tables. ` +
         `INSERT/UPDATE/DELETE/DDL and multiple statements are rejected. At most ${MAX_QUERY_ROWS} rows are returned.`,
       inputSchema: {
         sql: z.string().trim().min(1).max(4000).describe("A single PostgreSQL SELECT statement"),

@@ -26,7 +26,7 @@ const FORBIDDEN_PATTERNS: [RegExp, string][] = [
   [/\bcurrent_setting\b|\bset_config\b/i, "Reading or changing server settings is not allowed"],
   [/\binet_(server|client)_(addr|port)\b/i, "Server network details are not allowed"],
   [/\bdblink\w*|\blo_\w+/i, "External connections and large objects are not allowed"],
-  [/\bquery_logs\b|\b_prisma_migrations\b/i, "Only the users, products and orders tables can be queried"],
+  [/query_logs|_prisma_migrations/i, "Only the copilot_users, copilot_products and copilot_orders tables can be queried"],
   [/\bfor\s+(update|share|no\s+key\s+update|key\s+share)\b/i, "Row locking clauses are not allowed"],
 ];
 

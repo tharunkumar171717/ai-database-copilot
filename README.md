@@ -1,6 +1,6 @@
 # AI Database Copilot
 
-Ask questions about a PostgreSQL database in plain English. **Gemini** understands the question, decides which **MCP tools** it needs, the MCP server runs safe **read-only** queries against **PostgreSQL**, and Gemini turns the result into an answer. Every question is recorded in a `query_logs` audit table.
+Ask questions about a PostgreSQL database in plain English. **Gemini** understands the question, decides which **MCP tools** it needs, the MCP server runs safe **read-only** queries against **PostgreSQL**, and Gemini turns the result into an answer. Every question is recorded in a `copilot_query_logs` audit table.
 
 Built with Next.js 16 (App Router), TypeScript, Tailwind CSS, Auth.js (Google OAuth), the Google Gen AI SDK, the official MCP TypeScript SDK, Prisma 7 and PostgreSQL.
 
@@ -36,7 +36,7 @@ MCP client (lib/mcp-client.ts) ──JSON-RPC──► MCP server (mcp/server.ts
    ◄──────────── tool result (JSON) ────────────┘
 Gemini → natural-language answer
    ▼
-Route handler → writes query_logs (lib/query-logs.ts, Prisma, DATABASE_URL) → JSON to browser
+Route handler → writes copilot_query_logs (lib/query-logs.ts, Prisma, DATABASE_URL) → JSON to browser
 ```
 
 ```
@@ -53,7 +53,7 @@ lib/
   auth.ts  auth-actions.ts     Auth.js config + sign-in/out server actions
   gemini.ts                    Gemini ⇄ MCP tool-calling loop, system prompt, error mapping
   mcp-client.ts                MCP client (official SDK)
-  db.ts                        Prisma client (app DB: query_logs)
+  db.ts                        Prisma client (app DB: copilot_query_logs)
   query-logs.ts                Create/list query logs
 mcp/
   server.ts                    MCP server: registers the 6 tools
@@ -85,6 +85,11 @@ The MCP client and server run inside the same Next.js server function and talk t
 npx @modelcontextprotocol/inspector npx tsx mcp/stdio.ts
 ```
 
+### Tables
+
+All tables use a `copilot_` prefix so the app can share a database with other projects without name clashes:
+`copilot_users` (id, name, email, created_at), `copilot_products` (id, name, price, stock, created_at), `copilot_orders` (id, user_id → copilot_users, product_id → copilot_products, quantity, total_amount, status, created_at) and `copilot_query_logs`.
+
 ### MCP tools
 
 | Tool | Input | Returns |
@@ -102,10 +107,10 @@ There are two connections with different privileges:
 
 | Env var | Role | Used by | Can do |
 |---|---|---|---|
-| `DATABASE_URL` | owner | Prisma (migrations, seed, `query_logs`) | Full access |
-| `MCP_DATABASE_URL` | `mcp_readonly` | MCP server only | `SELECT` on `users`, `products`, `orders`, nothing else |
+| `DATABASE_URL` | owner | Prisma (migrations, seed, `copilot_query_logs`) | Full access |
+| `MCP_DATABASE_URL` | `mcp_readonly` | MCP server only | `SELECT` on `copilot_users`, `copilot_products`, `copilot_orders`, nothing else |
 
-`npm run db:readonly` creates `mcp_readonly` with `default_transaction_read_only = on`, a 5 s `statement_timeout`, and `SELECT`-only grants. It has **no access** to `query_logs`.
+`npm run db:readonly` creates `mcp_readonly` with `default_transaction_read_only = on`, a 5 s `statement_timeout`, and `SELECT`-only grants. It has **no access** to `copilot_query_logs`.
 
 ### How Google authentication works
 
@@ -113,7 +118,7 @@ Auth.js (NextAuth v5) with the Google provider (`lib/auth.ts`). Clicking **Conti
 
 ### How query logging works
 
-After each question, `/api/chat` writes one row to `query_logs`:
+After each question, `/api/chat` writes one row to `copilot_query_logs`:
 
 | Column | Content |
 |---|---|
@@ -129,7 +134,7 @@ Failures are logged too. View the logs at **/logs**: newest first, searchable by
 
 ### Question limit
 
-The project answers at most **100 questions in total** (all users combined). The cap is hard-coded as `QUESTION_LIMIT` in `lib/query-logs.ts`. Usage is the number of rows in `query_logs`, so failed questions count too. When the cap is reached, `/api/chat` returns `429` **before** calling Gemini, and the chat input is disabled. The chat page shows "N of 100 questions left". To reset, clear `query_logs`; to change the cap, edit the constant.
+The project answers at most **100 questions in total** (all users combined). The cap is hard-coded as `QUESTION_LIMIT` in `lib/query-logs.ts`. Usage is the number of rows in `copilot_query_logs`, so failed questions count too. When the cap is reached, `/api/chat` returns `429` **before** calling Gemini, and the chat input is disabled. The chat page shows "N of 100 questions left". To reset, clear `copilot_query_logs`; to change the cap, edit the constant.
 
 ---
 
@@ -172,7 +177,7 @@ npm run db:readonly           # create the read-only mcp_readonly role
 2. Set `MCP_DATABASE_URL` to the same host but with user `mcp_readonly.<project-ref>` and a new strong password.
 3. Run `npx prisma migrate deploy && npm run db:seed && npm run db:readonly` once from your machine.
 
-> Use a dedicated Supabase project/database. `db:seed` **clears** the `users`, `products` and `orders` tables.
+> All tables are prefixed `copilot_` (`copilot_users`, `copilot_products`, `copilot_orders`, `copilot_query_logs`), so they can share a Supabase database with other apps (e.g. one that already has a `users` table). `db:seed` **clears and refills only** the three `copilot_` business tables. Row-level security is enabled on all `copilot_` tables, and `db:readonly` revokes Supabase Data API (`anon`/`authenticated`) access to them.
 
 ## Google OAuth setup
 
@@ -233,9 +238,9 @@ vercel --prod
 - **The AI has no direct DB access.** It can only call the six MCP tools.
 - **Defence in depth for SQL:**
   1. zod validation of every tool input; table names are checked against an allow-list.
-  2. SQL guard: a single statement starting with `SELECT`/`WITH`. It rejects DML/DDL keywords, `SELECT INTO`, `FOR UPDATE`, comments, dollar quoting, stacked statements, `pg_*` functions/catalogs, `information_schema`, `current_setting`, and `query_logs`.
+  2. SQL guard: a single statement starting with `SELECT`/`WITH`. It rejects DML/DDL keywords, `SELECT INTO`, `FOR UPDATE`, comments, dollar quoting, stacked statements, `pg_*` functions/catalogs, `information_schema`, `current_setting`, and `copilot_query_logs`.
   3. Execution inside `BEGIN READ ONLY … ROLLBACK` with a 5 s statement timeout, wrapped in an outer `LIMIT 101` (100 rows returned).
-  4. Postgres role `mcp_readonly`: SELECT-only on 3 tables, read-only by default, with no access to `query_logs`.
+  4. Postgres role `mcp_readonly`: SELECT-only on 3 tables, read-only by default, with no access to `copilot_query_logs`.
 - **Parameterized queries** for all schema tools; identifiers come only from the allow-list.
 - **Errors are sanitized**: connection strings and passwords are stripped from messages, and users get friendly messages for Gemini, MCP, Postgres, timeout and network failures.
 - **Auth on every protected route** (pages and APIs) via `auth()`; session cookies are httpOnly and encrypted.
