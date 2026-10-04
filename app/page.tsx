@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import ClientIdLogger from "@/components/ClientIdLogger";
 import LoginButton from "@/components/LoginButton";
 import { auth } from "@/lib/auth";
 
@@ -36,6 +37,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
           </p>
         )}
 
+        <ClientIdLogger clientId={process.env.AUTH_GOOGLE_ID ?? null} />
         <div className="mt-8 flex justify-center">
           <LoginButton />
         </div>
