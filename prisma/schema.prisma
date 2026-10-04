@@ -1,0 +1,66 @@
+// AI Database Copilot - Prisma schema
+// Business tables (users, products, orders) are what the AI can query through MCP.
+// query_logs is an application table that records every question; the MCP
+// read-only role is NOT granted access to it.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+  orders    Order[]
+
+  @@map("users")
+}
+
+model Product {
+  id        Int      @id @default(autoincrement())
+  name      String
+  price     Decimal  @db.Decimal(12, 2)
+  stock     Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+  orders    Order[]
+
+  @@map("products")
+}
+
+model Order {
+  id          Int      @id @default(autoincrement())
+  userId      Int      @map("user_id")
+  productId   Int      @map("product_id")
+  quantity    Int
+  totalAmount Decimal  @map("total_amount") @db.Decimal(12, 2)
+  status      String   @default("pending")
+  createdAt   DateTime @default(now()) @map("created_at")
+  user        User     @relation(fields: [userId], references: [id])
+  product     Product  @relation(fields: [productId], references: [id])
+
+  @@index([userId])
+  @@index([productId])
+  @@index([status])
+  @@map("orders")
+}
+
+model QueryLog {
+  id           Int      @id @default(autoincrement())
+  userId       String   @map("user_id")
+  userEmail    String   @map("user_email")
+  question     String
+  generatedSql String?  @map("generated_sql")
+  toolUsed     String?  @map("tool_used")
+  response     String
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([userEmail])
+  @@map("query_logs")
+}

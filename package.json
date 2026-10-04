@@ -1,0 +1,49 @@
+{
+  "name": "ai-database-copilot",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "prisma generate && next build",
+    "start": "next start",
+    "lint": "eslint",
+    "postinstall": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:readonly": "tsx scripts/setup-readonly-user.ts",
+    "db:setup": "prisma migrate deploy && tsx prisma/seed.ts && tsx scripts/setup-readonly-user.ts",
+    "mcp:stdio": "tsx mcp/stdio.ts",
+    "test:mcp": "tsx scripts/test-mcp.ts",
+    "test:copilot": "tsx --conditions=react-server scripts/test-copilot.ts"
+  },
+  "dependencies": {
+    "@google/genai": "^2.27.0",
+    "@modelcontextprotocol/sdk": "^1.32.0",
+    "@prisma/adapter-pg": "^7.10.0",
+    "@prisma/client": "^7.10.0",
+    "dotenv": "^18.0.5",
+    "next": "16.3.8",
+    "next-auth": "^5.0.0-beta.32",
+    "pg": "^8.23.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "server-only": "^0.0.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.8",
+    "prisma": "^7.10.0",
+    "tailwindcss": "^4",
+    "tsx": "^4.23.15",
+    "typescript": "^5"
+  }
+}
