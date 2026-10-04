@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { askDatabaseCopilot, CopilotError } from "@/lib/gemini";
-import { createQueryLog } from "@/lib/query-logs";
+import { createQueryLog, getRemainingQuestions, QUESTION_LIMIT } from "@/lib/query-logs";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -32,6 +32,21 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
+  let remaining: number;
+  try {
+    remaining = await getRemainingQuestions();
+  } catch (err) {
+    console.error("[api/chat] could not read question count:", (err as Error).message);
+    return NextResponse.json({ error: "The database is unavailable. Please try again later." }, { status: 503 });
+  }
+  if (remaining <= 0) {
+    // Limit reached: refuse before calling Gemini so no more API usage happens.
+    return NextResponse.json(
+      { error: `The question limit for this project (${QUESTION_LIMIT} questions) has been reached.`, remaining: 0 },
+      { status: 429 },
+    );
+  }
+
   const user = { userId: session.user.id ?? session.user.email, userEmail: session.user.email };
 
   try {
@@ -50,6 +65,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       answer: result.answer,
       toolsUsed,
+      remaining: remaining - 1,
       // Generated SQL is intentionally NOT sent to the browser; it is stored in query_logs (/logs).
     });
   } catch (err) {
@@ -67,6 +83,6 @@ export async function POST(request: Request) {
       response: `ERROR: ${error.userMessage}`,
     });
 
-    return NextResponse.json({ error: error.userMessage }, { status: error.status });
+    return NextResponse.json({ error: error.userMessage, remaining: remaining - 1 }, { status: error.status });
   }
 }

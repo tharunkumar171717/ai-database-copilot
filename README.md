@@ -127,6 +127,10 @@ After each question, `/api/chat` writes one row to `query_logs`:
 
 Failures are logged too. View the logs at **/logs**: newest first, searchable by question or email, 20 per page.
 
+### Question limit
+
+The project answers at most **100 questions in total** (all users combined). The cap is hard-coded as `QUESTION_LIMIT` in `lib/query-logs.ts`. Usage is the number of rows in `query_logs`, so failed questions count too. When the cap is reached, `/api/chat` returns `429` **before** calling Gemini, and the chat input is disabled. The chat page shows "N of 100 questions left". To reset, clear `query_logs`; to change the cap, edit the constant.
+
 ---
 
 ## Environment variables

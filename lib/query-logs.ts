@@ -21,6 +21,17 @@ export async function createQueryLog(entry: NewQueryLog) {
   }
 }
 
+/**
+ * Hard cap on the total number of questions this deployment will answer (all users combined).
+ * Every answered or failed question is a row in query_logs, so the row count is the usage.
+ */
+export const QUESTION_LIMIT = 100;
+
+export async function getRemainingQuestions(): Promise<number> {
+  const used = await prisma.queryLog.count();
+  return Math.max(0, QUESTION_LIMIT - used);
+}
+
 export const LOGS_PAGE_SIZE = 20;
 
 export async function listQueryLogs({ page = 1, search = "" }: { page?: number; search?: string }) {
