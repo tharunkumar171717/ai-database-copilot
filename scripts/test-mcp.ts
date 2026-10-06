@@ -1,6 +1,9 @@
 /**
  * End-to-end test of the MCP server over stdio (spawns mcp/stdio.ts).
- * Verifies every tool works and that destructive / unsafe SQL is rejected.
+ * Verifies every tool works, that destructive / unsafe SQL is rejected, and that the
+ * read-only code tools work against the default repository (CODE_REPOSITORY is not
+ * passed through, so tharunkumar171717/incident-investigator@main is used) and
+ * reject path traversal. Needs network access to GitHub; GITHUB_TOKEN is optional.
  *
  *   npm run test:mcp
  */
@@ -19,7 +22,11 @@ async function main() {
   const transport = new StdioClientTransport({
     command: "npx",
     args: ["tsx", "mcp/stdio.ts"],
-    env: { PATH: process.env.PATH ?? "", MCP_DATABASE_URL: process.env.MCP_DATABASE_URL ?? "" },
+    env: {
+      PATH: process.env.PATH ?? "",
+      MCP_DATABASE_URL: process.env.MCP_DATABASE_URL ?? "",
+      ...(process.env.GITHUB_TOKEN ? { GITHUB_TOKEN: process.env.GITHUB_TOKEN } : {}),
+    },
     stderr: "ignore",
   });
   const client = new Client({ name: "mcp-test", version: "1.0.0" });
@@ -33,7 +40,13 @@ async function main() {
 
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name).sort();
-  check("tools/list exposes 6 tools", names.length === 6, names.join(", "));
+  check("tools/list exposes 15 tools (6 database + 9 code)", names.length === 15, names.join(", "));
+  check(
+    "no write tools are exposed",
+    !names.some((n) => /create|update|delete|write|commit_|pull_request|run_tests/.test(n)),
+    names.join(", "),
+  );
+  check("all tools are annotated read-only", tools.every((t) => t.annotations?.readOnlyHint === true));
 
   let r = await call("list_tables");
   check("list_tables", !r.isError && r.text.includes("copilot_orders"), r.text);
@@ -100,6 +113,83 @@ async function main() {
   const all = JSON.stringify(await call("database_summary"));
   const pw = process.env.MCP_DATABASE_URL ? new URL(process.env.MCP_DATABASE_URL).password : "";
   check("no credentials in tool output", !!pw && !all.includes(pw) && !all.includes("postgresql://"));
+
+  // --- Code tools -------------------------------------------------------------
+  const svc = "examples/orders-service";
+
+  r = await call("search_code", { query: "createOrder", path_prefix: svc });
+  check(
+    "search_code finds createOrder in examples/orders-service",
+    !r.isError && /examples\/orders-service\/src\/services\/order_service\.js:\d+:.*createOrder/.test(r.text),
+    r.text.slice(0, 160),
+  );
+
+  r = await call("find_references", { symbol: "getUser", path_prefix: svc });
+  check(
+    "find_references finds getUser definition and caller",
+    !r.isError &&
+      /Definitions of getUser \(1\):\nexamples\/orders-service\/src\/repositories\/user_repository\.js:\d+: function getUser/.test(r.text) &&
+      /order_service\.js:\d+: .*getUser\(userId\)/.test(r.text),
+    r.text.slice(0, 200),
+  );
+
+  r = await call("read_file", { path: `${svc}/src/services/order_service.js`, start_line: 19, end_line: 21 });
+  check("read_file returns numbered lines", !r.isError && /\n20 \|\s+ownerId: user\.id,/.test(r.text), r.text.slice(0, 160));
+
+  r = await call("read_file", { path: `${svc}/src/services/order_service.js`, start_line: 1, end_line: 5000 });
+  check("read_file caps the range", !r.isError && !r.text.includes(" 301 | "), r.text.split("\n")[0]);
+
+  for (const path of ["../.env", "/etc/passwd", `${svc}/../../../.env`, "~/.ssh/id_rsa"]) {
+    r = await call("read_file", { path });
+    check(`read_file rejects ${path}`, r.isError && /outside the repository/.test(r.text), r.text.slice(0, 100));
+  }
+
+  r = await call("list_repository_files", { path_prefix: svc });
+  check("list_repository_files", !r.isError && r.text.includes(`${svc}/src/server.js`), r.text.split("\n")[0]);
+
+  r = await call("list_repository_files", { path_prefix: "../" });
+  check("list_repository_files rejects traversal", r.isError, r.text.slice(0, 100));
+
+  r = await call("get_file", { path: `${svc}/src/routes/orders.js` });
+  check("get_file", !r.isError && r.text.includes("language: javascript"), r.text.slice(0, 120));
+
+  r = await call("get_branch", {});
+  check("get_branch (default ref)", !r.isError && /^branch main\nhead [0-9a-f]{40}/.test(r.text), r.text.slice(0, 100));
+
+  r = await call("get_recent_commits", { limit: 3 });
+  check("get_recent_commits", !r.isError && /\n[0-9a-f]{7} \d{4}-\d{2}-\d{2} /.test(r.text), r.text.slice(0, 160));
+
+  const sampleIncident = [
+    "POST /api/orders is returning 500 errors.",
+    "",
+    "Error: TypeError: Cannot read properties of null (reading 'id')",
+    "",
+    "Stack trace:",
+    "TypeError: Cannot read properties of null (reading 'id')",
+    "    at Object.createOrder (/srv/orders-service/src/services/order_service.js:20:18)",
+    "    at handleCreateOrder (/srv/orders-service/src/routes/orders.js:7:30)",
+    "    at Server.<anonymous> (/srv/orders-service/src/server.js:23:22)",
+    "",
+    "Logs:",
+    "2026-10-06T14:05:10Z INFO POST /api/orders 201 4ms",
+    "2026-10-06T14:05:12Z ERROR POST /api/orders 500 TypeError: Cannot read properties of null (reading 'id') user=u_300",
+    "2026-10-06T14:05:15Z ERROR POST /api/orders 500 TypeError: Cannot read properties of null (reading 'id') user=u_999",
+  ].join("\n");
+  r = await call("parse_stack_trace", { text: sampleIncident });
+  const parsed = r.isError ? null : JSON.parse(r.text);
+  check(
+    "parse_stack_trace parses the sample incident",
+    parsed?.runtime === "node" &&
+      parsed.error_type === "TypeError" &&
+      parsed.frames.length === 3 &&
+      parsed.frames[0].file === "/srv/orders-service/src/services/order_service.js" &&
+      parsed.frames[0].line === 20 &&
+      parsed.frames[0].func === "Object.createOrder" &&
+      parsed.frames[1].func === "handleCreateOrder" &&
+      parsed.logs.by_level.error >= 2 &&
+      parsed.logs.errors.some((l: { message: string }) => l.message.includes("user=u_999")),
+    r.text.slice(0, 200),
+  );
 
   await client.close();
   console.log(failures ? `\n${failures} check(s) FAILED` : "\nAll MCP checks passed");

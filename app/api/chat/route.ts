@@ -5,12 +5,12 @@ import { askDatabaseCopilot, CopilotError } from "@/lib/gemini";
 import { createQueryLog, getRemainingQuestions, QUESTION_LIMIT } from "@/lib/query-logs";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 180;
 
 const bodySchema = z.object({
-  message: z.string().trim().min(1, "Please enter a question").max(1000, "Question is too long (max 1000 characters)"),
+  message: z.string().trim().min(1, "Please enter a question").max(8000, "Message is too long (max 8000 characters)"),
   history: z
-    .array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(8000) }))
+    .array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(16000) }))
     .max(20)
     .default([]),
 });

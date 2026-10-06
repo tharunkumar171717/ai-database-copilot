@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import ChatInput from "./ChatInput";
 import Message, { type ChatMessage } from "./Message";
 
-const CLIENT_TIMEOUT_MS = 65_000;
+const CLIENT_TIMEOUT_MS = 185_000;
 
 type Props = { initialRemaining: number; limit: number };
 

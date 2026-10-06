@@ -1,5 +1,6 @@
 /**
- * MCP server exposing read-only database tools.
+ * MCP server exposing read-only database tools and read-only code tools
+ * (for investigating incidents in the repository set by CODE_REPOSITORY / CODE_REF).
  *
  * Built with the official TypeScript MCP SDK. The same server definition is used:
  *   - in-process by the Next.js app (lib/mcp-client.ts, via InMemoryTransport)
@@ -20,6 +21,19 @@ import {
   queryDatabase,
   sanitizeError,
 } from "./tools/database";
+import {
+  MAX_READ_LINES,
+  findReferences,
+  getBranch,
+  getCommit,
+  getFile,
+  getRecentCommits,
+  listRepositoryFiles,
+  parseIncidentText,
+  readFileRange,
+  searchCode,
+} from "./tools/code";
+import { CodeToolError, configuredRepo } from "./tools/github";
 
 const tableNameSchema = z
   .string()
@@ -29,16 +43,27 @@ const tableNameSchema = z
   .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "Table name may only contain letters, digits and underscores")
   .describe(`Table name. One of: ${EXPOSED_TABLES.join(", ")}`);
 
-/** Wrap a tool implementation so results/errors are always well-formed MCP responses. */
-async function run(fn: () => Promise<unknown>): Promise<CallToolResult> {
+const repoPathSchema = z.string().trim().min(1).max(500);
+
+/** Wrap a tool implementation so results/errors are always well-formed MCP responses. Strings are returned as-is. */
+async function run(fn: () => unknown): Promise<CallToolResult> {
   try {
     const data = await fn();
-    return { content: [{ type: "text", text: JSON.stringify(data) }] };
+    return { content: [{ type: "text", text: typeof data === "string" ? data : JSON.stringify(data) }] };
   } catch (err) {
-    const message =
-      err instanceof DatabaseToolError ? err.message : `Unexpected error: ${sanitizeError(err)}`;
-    if (!(err instanceof DatabaseToolError)) console.error("[mcp] tool error:", sanitizeError(err));
+    const known = err instanceof DatabaseToolError || err instanceof CodeToolError;
+    const message = known ? err.message : `Unexpected error: ${sanitizeError(err)}`;
+    if (!known) console.error("[mcp] tool error:", sanitizeError(err));
     return { isError: true, content: [{ type: "text", text: message }] };
+  }
+}
+
+function repoLabel(): string {
+  try {
+    const { repo, ref } = configuredRepo();
+    return `${repo.owner}/${repo.name}@${ref}`;
+  } catch {
+    return "the configured repository";
   }
 }
 
@@ -116,6 +141,135 @@ export function createDatabaseMcpServer(): McpServer {
       annotations: { readOnlyHint: true },
     },
     async () => run(() => databaseSummary()),
+  );
+
+  // --- Read-only code tools (incident investigation) ---------------------------
+  const repo = repoLabel();
+
+  server.registerTool(
+    "parse_stack_trace",
+    {
+      title: "Parse stack trace / logs",
+      description:
+        "Parse a pasted stack trace and/or log lines (Python, Node, Java/Kotlin, Go, Ruby, .NET). Returns the runtime, error type/message, " +
+        "application frames (innermost first, file:line) and error/warn log lines. Use it first when the user pastes an incident.",
+      inputSchema: { text: z.string().min(1).max(20_000).describe("The stack trace and/or logs, verbatim") },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ text }) => run(() => parseIncidentText({ text })),
+  );
+
+  server.registerTool(
+    "list_repository_files",
+    {
+      title: "List repository files",
+      description: `List file paths in ${repo} (dependency, build, binary and secret files are excluded). Narrow with path_prefix and/or a glob like '**/*order*'.`,
+      inputSchema: {
+        path_prefix: repoPathSchema.optional().describe("Directory to list, e.g. 'src/services'"),
+        glob: z.string().max(200).optional().describe("Glob filter, e.g. '**/*.py' or 'routes/*'"),
+        limit: z.number().int().min(1).max(300).optional().describe("Max paths (default 200)"),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async (input) => run(() => listRepositoryFiles(input)),
+  );
+
+  server.registerTool(
+    "search_code",
+    {
+      title: "Search code",
+      description: `Search file contents in ${repo} (like grep). Returns path:line matches. Literal by default; set regex=true for a regular expression.`,
+      inputSchema: {
+        query: z.string().min(1).max(300),
+        regex: z.boolean().optional(),
+        case_sensitive: z.boolean().optional(),
+        path_prefix: repoPathSchema.optional().describe("Only search under this directory"),
+        file_glob: z.string().max(200).optional().describe("e.g. '**/*.ts'"),
+        max_results: z.number().int().min(1).max(50).optional().describe("Default 30"),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async (input) => run(() => searchCode(input)),
+  );
+
+  server.registerTool(
+    "read_file",
+    {
+      title: "Read file lines",
+      description: `Read a range of lines (max ${MAX_READ_LINES} per call) from a file in ${repo}, with line numbers. Read around the lines you need, not whole large files.`,
+      inputSchema: {
+        path: repoPathSchema.describe("Repository-relative path"),
+        start_line: z.number().int().min(1).optional(),
+        end_line: z.number().int().min(1).optional(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async (input) => run(() => readFileRange(input)),
+  );
+
+  server.registerTool(
+    "get_file",
+    {
+      title: "Get file",
+      description: `Get a file's language, line count and first 150 lines from ${repo}. Use read_file for other ranges.`,
+      inputSchema: { path: repoPathSchema.describe("Repository-relative path") },
+      annotations: { readOnlyHint: true },
+    },
+    async (input) => run(() => getFile(input)),
+  );
+
+  server.registerTool(
+    "find_references",
+    {
+      title: "Find references",
+      description: `Find where a symbol (function, class, variable) is defined and used in ${repo}. Use it to follow call chains, e.g. route -> service -> failing function.`,
+      inputSchema: {
+        symbol: z.string().min(1).max(120).regex(/^[A-Za-z_$][\w$.]*$/, "must be an identifier"),
+        path_prefix: repoPathSchema.optional(),
+        max_results: z.number().int().min(1).max(50).optional().describe("Default 30"),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async (input) => run(() => findReferences(input)),
+  );
+
+  server.registerTool(
+    "get_recent_commits",
+    {
+      title: "Get recent commits",
+      description: `List recent commits on ${repo}, optionally only those touching a path. Useful to check whether a recent change introduced the bug.`,
+      inputSchema: {
+        path: repoPathSchema.optional().describe("File or directory to filter by"),
+        limit: z.number().int().min(1).max(20).optional().describe("Default 10"),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async (input) => run(() => getRecentCommits(input)),
+  );
+
+  server.registerTool(
+    "get_commit",
+    {
+      title: "Get commit",
+      description: `Show a commit of ${repo}: message, changed files and patches (truncated). Optionally filter to one path.`,
+      inputSchema: {
+        sha: z.string().min(4).max(40).regex(/^[0-9a-f]+$/i, "must be a commit SHA"),
+        path: repoPathSchema.optional(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async (input) => run(() => getCommit(input)),
+  );
+
+  server.registerTool(
+    "get_branch",
+    {
+      title: "Get branch",
+      description: `Get a branch's head commit in ${repo}. Defaults to the investigated branch.`,
+      inputSchema: { name: z.string().min(1).max(200).regex(/^[\w./-]+$/, "invalid branch name").optional() },
+      annotations: { readOnlyHint: true },
+    },
+    async (input) => run(() => getBranch(input)),
   );
 
   return server;

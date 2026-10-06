@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type KeyboardEvent } from "react";
 
 const EXAMPLES = [
   "What tables are available?",
@@ -35,6 +35,14 @@ export default function ChatInput({ onSend, loading, remaining, limit }: Props) 
     submit(input);
   }
 
+  // Enter sends; Shift+Enter keeps a newline so pasted stack traces and logs stay intact.
+  function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      submit(input);
+    }
+  }
+
   return (
     <div className="sticky bottom-0 border-t border-slate-200 bg-slate-50 pb-3 pt-2 dark:border-slate-800 dark:bg-slate-950">
       {/* Suggestions stay visible for the whole conversation */}
@@ -52,15 +60,21 @@ export default function ChatInput({ onSend, loading, remaining, limit }: Props) 
         ))}
       </div>
 
-      <form onSubmit={onSubmit} className="flex gap-2">
-        <input
+      <form onSubmit={onSubmit} className="flex items-end gap-2">
+        <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder={limitReached ? "Question limit reached" : "How many pending orders are there?"}
-          maxLength={1000}
+          onKeyDown={onKeyDown}
+          placeholder={
+            limitReached
+              ? "Question limit reached"
+              : "Ask about the database, or paste an incident (error, stack trace, logs). Shift+Enter for a new line."
+          }
+          maxLength={8000}
+          rows={Math.min(8, Math.max(1, input.split("\n").length))}
           disabled={disabled}
-          aria-label="Ask a question about the database"
-          className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+          aria-label="Ask a question about the database or paste an incident"
+          className="max-h-60 min-w-0 flex-1 resize-none rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
         />
         <button
           type="submit"
