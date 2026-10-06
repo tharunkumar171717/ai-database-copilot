@@ -62,7 +62,7 @@ lib/
   pg-config.ts                 Shared node-postgres config (TLS for remote hosts)
   query-logs.ts                Create/list query logs, 100-question limit
 mcp/
-  server.ts                    MCP server: registers the 6 database + 9 code tools
+  server.ts                    MCP server: registers the 6 database + 10 code tools
   stdio.ts                     Run the MCP server standalone over stdio
   tools/database.ts            Database tool implementations (read-only pg pool)
   tools/sql-guard.ts           SELECT-only validator
@@ -94,7 +94,7 @@ scripts/
 
 Paste an incident into `/chat`. Gemini calls `parse_stack_trace`, maps production paths (e.g. `/srv/orders-service/src/...`) to repository files with `search_code`, reads the failing lines with `read_file`, follows callers and callees with `find_references`, checks `get_recent_commits` / `get_commit` when a regression is plausible, and can query the `copilot_` tables when the incident mentions users, orders or products. The answer has these sections: **Root cause**, **Evidence** (`path:line`), **Call chain**, **Severity**, **Confidence** (0–100), **Suggested fix** (a diff shown in the chat only; nothing is applied) and **Regression test to add**.
 
-The code tools inspect exactly one repository, set by `CODE_REPOSITORY` and `CODE_REF` on the server. The model can pick paths, symbols and commits inside it, but never another repository. On first use, the commit at `CODE_REF` is downloaded as a tarball and extracted into `os.tmpdir()/ai-database-copilot/workspaces/<sha>` (`/tmp` on Vercel). That snapshot is reused until the branch moves; the ref → SHA lookup is cached for 60 s.
+You can also ask general questions about that repository: what a function does, where something is used, what changed recently, or what branches exist. The code tools have read access to exactly one repository, set by `CODE_REPOSITORY` on the server. They can read any branch, tag or commit of it (`ref` parameter; `CODE_REF` is the default), but never another repository. On first use, the commit at `CODE_REF` is downloaded as a tarball and extracted into `os.tmpdir()/ai-database-copilot/workspaces/<sha>` (`/tmp` on Vercel). That snapshot is reused until the branch moves; the ref → SHA lookup is cached for 60 s. Other refs get their own snapshots, and at most 8 are kept in `/tmp`.
 
 The MCP client and server run inside the same Next.js server function and talk the real MCP protocol over the SDK's `InMemoryTransport`. This works on Vercel serverless (there's no child process to spawn and no extra public endpoint to secure). The same server can also run standalone over **stdio** (`npm run mcp:stdio`) for MCP Inspector or desktop MCP clients:
 
@@ -109,7 +109,7 @@ All tables use a `copilot_` prefix so the app can share a database with other pr
 
 ### MCP tools
 
-All 15 tools are annotated `readOnlyHint: true`. None of them can write data, write to GitHub, or run repository code.
+All 16 tools are annotated `readOnlyHint: true`. None of them can write data, write to GitHub, or run repository code.
 
 **Database**
 
@@ -122,18 +122,19 @@ All 15 tools are annotated `readOnlyHint: true`. None of them can write data, wr
 | `query_database` | `sql` | Rows of a single read-only SELECT (max 100 rows) |
 | `database_summary` | – | Tables, columns, row counts, relationships |
 
-**Code** (repository = `CODE_REPOSITORY` at `CODE_REF`)
+**Code** (repository = `CODE_REPOSITORY`; tools marked † take an optional `ref`, a branch, tag or SHA defaulting to `CODE_REF`)
 
 | Tool | Input | Returns |
 |---|---|---|
 | `parse_stack_trace` | `text` (≤ 20 000 chars) | Runtime, error type/message, application frames (innermost first), error/warn log lines |
-| `list_repository_files` | `path_prefix?`, `glob?`, `limit?` (≤ 300) | File paths (dependency, build, binary and secret files excluded) |
-| `search_code` | `query`, `regex?`, `case_sensitive?`, `path_prefix?`, `file_glob?`, `max_results?` (≤ 50) | `path:line: text` matches |
-| `read_file` | `path`, `start_line?`, `end_line?` | Numbered lines, max 300 per call |
-| `get_file` | `path` | Language, line count, first 150 lines |
-| `find_references` | `symbol`, `path_prefix?`, `max_results?` (≤ 50) | Definitions and usages as `path:line` |
-| `get_recent_commits` | `path?`, `limit?` (≤ 20) | SHA, date, author, subject |
+| `list_repository_files` † | `path_prefix?`, `glob?`, `limit?` (≤ 300) | File paths (dependency, build, binary and secret files excluded) |
+| `search_code` † | `query`, `regex?`, `case_sensitive?`, `path_prefix?`, `file_glob?`, `max_results?` (≤ 50) | `path:line: text` matches |
+| `read_file` † | `path`, `start_line?`, `end_line?` | Numbered lines, max 300 per call |
+| `get_file` † | `path` | Language, line count, first 150 lines |
+| `find_references` † | `symbol`, `path_prefix?`, `max_results?` (≤ 50) | Definitions and usages as `path:line` |
+| `get_recent_commits` † | `path?`, `limit?` (≤ 20) | SHA, date, author, subject |
 | `get_commit` | `sha`, `path?` | Message, changed files, patches (≈ 8 000 chars total) |
+| `list_branches` | `limit?` (≤ 200) | Branch names with head commits; marks the investigated one |
 | `get_branch` | `name?` | Head commit of a branch (default `CODE_REF`) |
 
 Every code-tool output is capped at 15 000 characters.
@@ -190,7 +191,7 @@ See `.env.example`.
 | `AUTH_GOOGLE_ID` | ✅ | Google OAuth client id |
 | `AUTH_GOOGLE_SECRET` | ✅ | Google OAuth client secret |
 | `CODE_REPOSITORY` | optional | `owner/name` the code tools inspect. Default `tharunkumar171717/incident-investigator` |
-| `CODE_REF` | optional | Branch, tag or SHA to inspect. Default `main` |
+| `CODE_REF` | optional | Default branch, tag or SHA to read (the model may read other refs of the same repo). Default `main` |
 | `GITHUB_TOKEN` | optional | Fine-grained, **read-only** token (Contents + Metadata: read). Needed only for private repos or higher rate limits; public repos work without it (60 GitHub API requests/hour per IP) |
 
 None of these use the `NEXT_PUBLIC_` prefix, so none are ever bundled into browser code.
@@ -288,6 +289,7 @@ vercel --prod
 - What products are out of stock?  → *Samsung Galaxy S25, iPad Air, Samsung T7 SSD*
 - Why does `POST /api/orders` return 500? (paste the error, stack trace and logs)
 - Where is `createOrder` defined, and who calls it?
+- What branches does the repo have? What does `getUser` do on `main`?
 - What changed recently in `examples/orders-service`?
 - Do the users in these error logs (`user=u_300`) exist in our users table?
 
@@ -317,9 +319,9 @@ Expected: `getUser()` in `examples/orders-service/src/repositories/user_reposito
 ## Security considerations
 
 - **Secrets stay on the server.** The Gemini key and DB URLs are read only in server modules (`import "server-only"`), never prefixed `NEXT_PUBLIC_`. `.env` is git-ignored; `.env.example` has placeholders.
-- **The AI has no direct DB or GitHub access.** It can only call the 15 read-only MCP tools.
+- **The AI has no direct DB or GitHub access.** It can only call the 16 read-only MCP tools.
 - **Code tools are read-only and confined:**
-  - The repository comes from server env, not from the model.
+  - The repository comes from server env, not from the model. The model can only choose a ref of that repository; refs are validated, so `..`, a leading `-` and URLs are rejected.
   - The GitHub client only reads; there are no branch, commit or PR tools.
   - Repository code and tests are never executed.
   - Paths are validated: `..`, absolute paths, `~` and NUL are rejected. Symlinks are not indexed, and reads must resolve inside the snapshot.

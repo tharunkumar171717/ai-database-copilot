@@ -1,9 +1,10 @@
 /**
  * Read-only code tools for incident investigation.
  *
- * Every tool works on the single repository configured by CODE_REPOSITORY /
- * CODE_REF (see ./github.ts); the model can choose paths, symbols and commits
- * inside that repository but never the repository itself. Outputs are capped
+ * Every tool works on the single repository configured by CODE_REPOSITORY
+ * (see ./github.ts); the model can choose refs (branch/tag/SHA, default
+ * CODE_REF), paths, symbols and commits inside that repository but never the
+ * repository itself. Outputs are capped
  * so a tool never returns a whole repository. Nothing here writes to GitHub
  * or executes repository code.
  */
@@ -108,8 +109,8 @@ function header(ws: Workspace) {
 
 // --- Repository tools ------------------------------------------------------------
 
-export async function listRepositoryFiles(input: { path_prefix?: string; glob?: string; limit?: number }): Promise<string> {
-  const ws = await getWorkspace();
+export async function listRepositoryFiles(input: { path_prefix?: string; glob?: string; limit?: number; ref?: string }): Promise<string> {
+  const ws = await getWorkspace(input.ref);
   const files = filterFiles(ws, input.path_prefix, input.glob);
   const limit = input.limit ?? 200;
   return truncate(
@@ -126,8 +127,9 @@ export async function searchCode(input: {
   path_prefix?: string;
   file_glob?: string;
   max_results?: number;
+  ref?: string;
 }): Promise<string> {
-  const ws = await getWorkspace();
+  const ws = await getWorkspace(input.ref);
   let re: RegExp;
   try {
     re = new RegExp(input.regex ? input.query : escapeRegExp(input.query), input.case_sensitive ? "" : "i");
@@ -156,21 +158,21 @@ export async function searchCode(input: {
   );
 }
 
-export async function readFileRange(input: { path: string; start_line?: number; end_line?: number }): Promise<string> {
-  const ws = await getWorkspace();
+export async function readFileRange(input: { path: string; start_line?: number; end_line?: number; ref?: string }): Promise<string> {
+  const ws = await getWorkspace(input.ref);
   const { path, lines } = await fileLines(ws, input.path);
   const start = Math.min(input.start_line ?? 1, lines.length);
   const end = Math.min(input.end_line ?? start + 199, start + MAX_READ_LINES - 1, lines.length);
   if (end < start) throw new CodeToolError("end_line must be >= start_line.");
-  return truncate(`${path} (lines ${start}-${end} of ${lines.length})\n${numberLines(lines.slice(start - 1, end), start)}`, MAX_OUTPUT_CHARS);
+  return truncate(`${header(ws)} ${path} (lines ${start}-${end} of ${lines.length})\n${numberLines(lines.slice(start - 1, end), start)}`, MAX_OUTPUT_CHARS);
 }
 
-export async function getFile(input: { path: string }): Promise<string> {
-  const ws = await getWorkspace();
+export async function getFile(input: { path: string; ref?: string }): Promise<string> {
+  const ws = await getWorkspace(input.ref);
   const { path, lines } = await fileLines(ws, input.path);
   const head = numberLines(lines.slice(0, 150), 1);
   return truncate(
-    `path: ${path}\nlanguage: ${languageFor(path)}\nlines: ${lines.length}\n---\n${head}${lines.length > 150 ? "\n… (use read_file for more)" : ""}`,
+    `${header(ws)}\npath: ${path}\nlanguage: ${languageFor(path)}\nlines: ${lines.length}\n---\n${head}${lines.length > 150 ? "\n… (use read_file for more)" : ""}`,
     MAX_OUTPUT_CHARS,
   );
 }
@@ -190,8 +192,8 @@ function definitionPatterns(symbol: string): RegExp[] {
   ];
 }
 
-export async function findReferences(input: { symbol: string; path_prefix?: string; max_results?: number }): Promise<string> {
-  const ws = await getWorkspace();
+export async function findReferences(input: { symbol: string; path_prefix?: string; max_results?: number; ref?: string }): Promise<string> {
+  const ws = await getWorkspace(input.ref);
   const symbol = input.symbol.split(".").pop()!;
   const word = new RegExp(`(^|[^\\w$])${escapeRegExp(symbol)}(?![\\w$])`);
   const defs = definitionPatterns(symbol);
@@ -220,8 +222,8 @@ export async function findReferences(input: { symbol: string; path_prefix?: stri
 
 // --- Git history tools (read-only GitHub API) ---------------------------------------
 
-export async function getRecentCommits(input: { path?: string; limit?: number }): Promise<string> {
-  const ws = await getWorkspace();
+export async function getRecentCommits(input: { path?: string; limit?: number; ref?: string }): Promise<string> {
+  const ws = await getWorkspace(input.ref);
   const path = input.path ? cleanRepoPath(input.path) : undefined;
   try {
     const { data } = await readClient().repos.listCommits({
@@ -264,6 +266,22 @@ export async function getCommit(input: { sha: string; path?: string }): Promise<
     );
   } catch (err) {
     throw toGitHubError(err, `read commit ${input.sha}`);
+  }
+}
+
+export async function listBranches(input: { limit?: number }): Promise<string> {
+  const { repo, ref } = configuredRepo();
+  const limit = input.limit ?? 100;
+  try {
+    const gh = readClient();
+    const names: string[] = [];
+    for await (const { data } of gh.paginate.iterator(gh.repos.listBranches, { owner: repo.owner, repo: repo.name, per_page: 100 })) {
+      names.push(...data.map((b) => `${b.name} ${shortSha(b.commit.sha)}${b.name === ref ? " (investigated)" : ""}${b.protected ? " [protected]" : ""}`));
+      if (names.length >= limit + 1) break;
+    }
+    return `${repo.owner}/${repo.name}: ${names.length > limit ? `more than ${limit}` : names.length} branch(es)${names.length > limit ? `, showing ${limit}` : ""}\n${names.slice(0, limit).join("\n") || "(none)"}`;
+  } catch (err) {
+    throw toGitHubError(err, "list branches");
   }
 }
 

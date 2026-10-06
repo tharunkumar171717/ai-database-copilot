@@ -1,6 +1,6 @@
 /**
  * MCP server exposing read-only database tools and read-only code tools
- * (for investigating incidents in the repository set by CODE_REPOSITORY / CODE_REF).
+ * (for reading and investigating the repository set by CODE_REPOSITORY; any branch, tag or commit).
  *
  * Built with the official TypeScript MCP SDK. The same server definition is used:
  *   - in-process by the Next.js app (lib/mcp-client.ts, via InMemoryTransport)
@@ -28,6 +28,7 @@ import {
   getCommit,
   getFile,
   getRecentCommits,
+  listBranches,
   listRepositoryFiles,
   parseIncidentText,
   readFileRange,
@@ -44,6 +45,13 @@ const tableNameSchema = z
   .describe(`Table name. One of: ${EXPOSED_TABLES.join(", ")}`);
 
 const repoPathSchema = z.string().trim().min(1).max(500);
+const refSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .optional()
+  .describe("Branch, tag or commit SHA of the same repository (default: the investigated branch)");
 
 /** Wrap a tool implementation so results/errors are always well-formed MCP responses. Strings are returned as-is. */
 async function run(fn: () => unknown): Promise<CallToolResult> {
@@ -168,6 +176,7 @@ export function createDatabaseMcpServer(): McpServer {
         path_prefix: repoPathSchema.optional().describe("Directory to list, e.g. 'src/services'"),
         glob: z.string().max(200).optional().describe("Glob filter, e.g. '**/*.py' or 'routes/*'"),
         limit: z.number().int().min(1).max(300).optional().describe("Max paths (default 200)"),
+        ref: refSchema,
       },
       annotations: { readOnlyHint: true },
     },
@@ -186,6 +195,7 @@ export function createDatabaseMcpServer(): McpServer {
         path_prefix: repoPathSchema.optional().describe("Only search under this directory"),
         file_glob: z.string().max(200).optional().describe("e.g. '**/*.ts'"),
         max_results: z.number().int().min(1).max(50).optional().describe("Default 30"),
+        ref: refSchema,
       },
       annotations: { readOnlyHint: true },
     },
@@ -201,6 +211,7 @@ export function createDatabaseMcpServer(): McpServer {
         path: repoPathSchema.describe("Repository-relative path"),
         start_line: z.number().int().min(1).optional(),
         end_line: z.number().int().min(1).optional(),
+        ref: refSchema,
       },
       annotations: { readOnlyHint: true },
     },
@@ -212,7 +223,7 @@ export function createDatabaseMcpServer(): McpServer {
     {
       title: "Get file",
       description: `Get a file's language, line count and first 150 lines from ${repo}. Use read_file for other ranges.`,
-      inputSchema: { path: repoPathSchema.describe("Repository-relative path") },
+      inputSchema: { path: repoPathSchema.describe("Repository-relative path"), ref: refSchema },
       annotations: { readOnlyHint: true },
     },
     async (input) => run(() => getFile(input)),
@@ -227,6 +238,7 @@ export function createDatabaseMcpServer(): McpServer {
         symbol: z.string().min(1).max(120).regex(/^[A-Za-z_$][\w$.]*$/, "must be an identifier"),
         path_prefix: repoPathSchema.optional(),
         max_results: z.number().int().min(1).max(50).optional().describe("Default 30"),
+        ref: refSchema,
       },
       annotations: { readOnlyHint: true },
     },
@@ -241,6 +253,7 @@ export function createDatabaseMcpServer(): McpServer {
       inputSchema: {
         path: repoPathSchema.optional().describe("File or directory to filter by"),
         limit: z.number().int().min(1).max(20).optional().describe("Default 10"),
+        ref: refSchema,
       },
       annotations: { readOnlyHint: true },
     },
@@ -259,6 +272,17 @@ export function createDatabaseMcpServer(): McpServer {
       annotations: { readOnlyHint: true },
     },
     async (input) => run(() => getCommit(input)),
+  );
+
+  server.registerTool(
+    "list_branches",
+    {
+      title: "List branches",
+      description: `List the branches of ${repo} with their head commits. Pass a branch as \`ref\` to the other code tools to read it.`,
+      inputSchema: { limit: z.number().int().min(1).max(200).optional().describe("Max branches (default 100)") },
+      annotations: { readOnlyHint: true },
+    },
+    async (input) => run(() => listBranches(input)),
   );
 
   server.registerTool(

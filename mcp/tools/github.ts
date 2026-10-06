@@ -1,8 +1,9 @@
 /**
  * Read-only access to the one GitHub repository the code tools may inspect.
  *
- * The repository comes from env (CODE_REPOSITORY / CODE_REF), never from the
- * model. Each commit is downloaded once as a tarball and extracted into a
+ * The repository comes from env (CODE_REPOSITORY), never from the model.
+ * CODE_REF is the default branch; the model may read any other branch, tag
+ * or commit of that same repository. Each commit is downloaded once as a tarball and extracted into a
  * cached snapshot under the OS temp dir (/tmp on Vercel); tools then search
  * and read that snapshot. Nothing here can write to GitHub.
  *
@@ -37,6 +38,7 @@ const DEFAULT_REF = "main";
 const MAX_ARCHIVE_BYTES = 50 * 1024 * 1024;
 const MAX_FILE_BYTES = 1024 * 1024;
 const SHA_CACHE_MS = 60_000;
+const MAX_SNAPSHOTS = 8;
 
 const ROOT = path.join(os.tmpdir(), "ai-database-copilot", "workspaces");
 const SKIP_DIRS = new Set([".git", "node_modules", "vendor", "dist", "build", ".next", "out", "target", "__pycache__", ".venv", "venv", "coverage", ".turbo", ".cache"]);
@@ -97,11 +99,21 @@ export function toGitHubError(err: unknown, what: string): CodeToolError {
 
 // --- Ref -> SHA -----------------------------------------------------------------
 
-let shaCache: { key: string; sha: string; at: number } | undefined;
+const shaCache = new Map<string, { sha: string; at: number }>();
+
+/** Validates a branch, tag or commit SHA from the model. */
+export function cleanRef(ref: string): string {
+  const r = ref.trim();
+  if (!r || r.length > 200 || !/^[\w./-]+$/.test(r) || r.includes("..") || r.startsWith("/") || r.startsWith("-") || r.endsWith(".lock")) {
+    throw new CodeToolError(`Invalid ref "${ref}". Use a branch name, tag or commit SHA.`);
+  }
+  return r;
+}
 
 export async function resolveSha(repo: RepoRef, ref: string): Promise<string> {
   const key = `${repo.owner}/${repo.name}@${ref}`;
-  if (shaCache?.key === key && Date.now() - shaCache.at < SHA_CACHE_MS) return shaCache.sha;
+  const cached = shaCache.get(key);
+  if (cached && Date.now() - cached.at < SHA_CACHE_MS) return cached.sha;
   try {
     const { data } = await readClient().request("GET /repos/{owner}/{repo}/commits/{ref}", {
       owner: repo.owner,
@@ -111,9 +123,14 @@ export async function resolveSha(repo: RepoRef, ref: string): Promise<string> {
     });
     const sha = String(data).trim();
     if (!/^[0-9a-f]{40}$/.test(sha)) throw new CodeToolError(`Could not resolve "${ref}" to a commit.`);
-    shaCache = { key, sha, at: Date.now() };
+    if (shaCache.size > 200) shaCache.clear();
+    shaCache.set(key, { sha, at: Date.now() });
     return sha;
   } catch (err) {
+    const status = (err as { status?: number })?.status;
+    if (status === 404 || status === 422) {
+      throw new CodeToolError(`Ref "${ref}" was not found in ${repo.owner}/${repo.name}. Use list_branches to see the branches.`);
+    }
     throw toGitHubError(err, `resolve "${ref}" in ${key.split("@")[0]}`);
   }
 }
@@ -122,9 +139,10 @@ export async function resolveSha(repo: RepoRef, ref: string): Promise<string> {
 
 const inflight = new Map<string, Promise<Workspace>>();
 
-/** The cached snapshot of CODE_REPOSITORY at CODE_REF (downloaded on first use). */
-export async function getWorkspace(): Promise<Workspace> {
-  const { repo, ref } = configuredRepo();
+/** The cached snapshot of CODE_REPOSITORY at `ref` (default CODE_REF), downloaded on first use. */
+export async function getWorkspace(refInput?: string): Promise<Workspace> {
+  const { repo, ref: defaultRef } = configuredRepo();
+  const ref = refInput ? cleanRef(refInput) : defaultRef;
   const sha = await resolveSha(repo, ref);
   const key = `${repo.owner}__${repo.name}__${sha}`.replace(/[^A-Za-z0-9._-]/g, "_");
   const existing = inflight.get(key);
@@ -140,6 +158,7 @@ async function load(repo: RepoRef, ref: string, sha: string, key: string): Promi
   const ready = await stat(path.join(dir, ".ready")).then(() => true, () => false);
 
   if (!ready) {
+    await pruneSnapshots();
     const tmp = `${dir}.tmp-${process.pid}-${Date.now()}`;
     await mkdir(path.join(tmp, "src"), { recursive: true });
     try {
@@ -157,6 +176,20 @@ async function load(repo: RepoRef, ref: string, sha: string, key: string): Promi
     }
   }
   return { repo, ref, sha, root: await realpath(root), files: await indexFiles(root) };
+}
+
+/** Keeps /tmp bounded: removes the oldest snapshots once there are MAX_SNAPSHOTS. */
+async function pruneSnapshots() {
+  const entries = await readdir(ROOT, { withFileTypes: true }).catch(() => []);
+  const dirs = await Promise.all(
+    entries
+      .filter((e) => e.isDirectory() && !e.name.includes(".tmp-"))
+      .map(async (e) => ({ dir: path.join(ROOT, e.name), at: (await stat(path.join(ROOT, e.name))).mtimeMs })),
+  );
+  dirs.sort((a, b) => a.at - b.at);
+  for (const d of dirs.slice(0, Math.max(0, dirs.length - MAX_SNAPSHOTS + 1))) {
+    await rm(d.dir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 async function download(repo: RepoRef, sha: string, dest: string) {

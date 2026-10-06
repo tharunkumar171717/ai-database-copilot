@@ -40,7 +40,7 @@ async function main() {
 
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name).sort();
-  check("tools/list exposes 15 tools (6 database + 9 code)", names.length === 15, names.join(", "));
+  check("tools/list exposes 16 tools (6 database + 10 code)", names.length === 16, names.join(", "));
   check(
     "no write tools are exposed",
     !names.some((n) => /create|update|delete|write|commit_|pull_request|run_tests/.test(n)),
@@ -155,6 +155,20 @@ async function main() {
 
   r = await call("get_branch", {});
   check("get_branch (default ref)", !r.isError && /^branch main\nhead [0-9a-f]{40}/.test(r.text), r.text.slice(0, 100));
+
+  r = await call("list_branches", {});
+  check("list_branches includes main", !r.isError && /\nmain [0-9a-f]{7} \(investigated\)/.test(r.text), r.text.slice(0, 160));
+
+  r = await call("read_file", { path: `${svc}/src/services/order_service.js`, start_line: 20, end_line: 20, ref: "main" });
+  check("read_file with an explicit ref", !r.isError && /@main [0-9a-f]{7}\] .*\n20 \|/.test(r.text), r.text.slice(0, 120));
+
+  for (const ref of ["../main", "main..evil", "-x", "https://github.com/someone/else"]) {
+    r = await call("search_code", { query: "x", ref });
+    check(`rejects ref ${ref}`, r.isError && /Invalid ref/.test(r.text), r.text.slice(0, 100));
+  }
+
+  r = await call("read_file", { path: "README.md", ref: "branch-that-does-not-exist" });
+  check("unknown ref is a friendly error", r.isError && /was not found in/.test(r.text), r.text.slice(0, 100));
 
   r = await call("get_recent_commits", { limit: 3 });
   check("get_recent_commits", !r.isError && /\n[0-9a-f]{7} \d{4}-\d{2}-\d{2} /.test(r.text), r.text.slice(0, 160));
